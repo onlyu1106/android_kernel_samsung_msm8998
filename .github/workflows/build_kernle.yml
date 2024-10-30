@@ -1,22 +1,73 @@
-name: Samsung SDM8898 Kernel Builder
+name: Build Kernel with KernelSU and Anykernel3
 
 on:
   push:
-    branches: [ pp ]
-  pull_request:
-    branches: [ pp ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: aarch64 toolchain
-      run: mkdir -p ../PLATFORM/prebuilts/gcc/linux-x86/aarch64 && git clone  https://github.com/djb77/aarch64-linux-android-4.9 ../PLATFORM/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9
-    - name: make kernel for dream2qltechn
-      run: ./build_kernel_64.sh dream2qlte_chn_open -c
+    env:
+      KERNEL_DIR: ./kernel
+      OUT_DIR: ./output
+      ANYKERNEL_DIR: ./Anykernel3
 
-    - uses: actions/upload-artifact@v1
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential bc bison flex libssl-dev libncurses5-dev ccache git python3
+
+    - name: Download Kernel Source
+      run: |
+        git clone --depth=1 https://github.com/onlyu1106/android_kernel_samsung_msm8998.git $KERNEL_DIR
+
+    - name: Apply KernelSU patches
+      run: |
+        git clone https://github.com/tiann/KernelSU.git
+        cd $KERNEL_DIR
+        for patch in ../KernelSU/patches/*.patch; do
+          patch -p1 < $patch
+        done
+
+    - name: Configure Kernel
+      run: |
+        cd $KERNEL_DIR
+        make ARCH=arm64 O=$OUT_DIR exynos8895_defconfig
+        # Bật KernelSU trong file cấu hình
+        sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' $OUT_DIR/.config
+
+    - name: Build Kernel
+      run: |
+        cd $KERNEL_DIR
+        make ARCH=arm64 O=$OUT_DIR -j$(nproc)
+
+    - name: Clone Anykernel3
+      run: |
+        git clone https://github.com/osm0sis/Anykernel3.git $ANYKERNEL_DIR
+
+    - name: Copy Kernel to Anykernel3
+      run: |
+        cp $OUT_DIR/arch/arm64/boot/Image.gz-dtb $ANYKERNEL_DIR
+
+    - name: Configure Anykernel3
+      run: |
+        cd $ANYKERNEL_DIR
+        sed -i 's/KERNEL_NAME=.*/KERNEL_NAME="Galaxy_Note_8_Kernel"/' anykernel.sh
+        sed -i 's/DEVICE_NAME=.*/DEVICE_NAME="greatlte"/' anykernel.sh
+
+    - name: Package Kernel with Anykernel3
+      run: |
+        cd $ANYKERNEL_DIR
+        zip -r9 kernel_with_kernelsu_anykernel.zip *
+
+    - name: Upload Kernel Package
+      uses: actions/upload-artifact@v2
       with:
-        name: dream2qltechn
-        path: build/bin/dream2qltechn
+        name: kernel_with_kernelsu_anykernel
+        path: $ANYKERNEL_DIR/kernel_with_kernelsu_anykernel.zip
